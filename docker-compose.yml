@@ -1,0 +1,82 @@
+version: "3.8"
+name: supermemory
+services:
+  # PostgreSQL 数据库 (集成向量搜索)
+  postgres:
+    image: pgvector/pgvector:pg17
+    container_name: supermemory-postgres
+    environment:
+      - POSTGRES_DB=supermemory
+      - POSTGRES_USER=supermemory
+      - POSTGRES_PASSWORD=supermemory_2024_secure
+      - TZ=Asia/Shanghai
+    # ports:  # 仅内部访问，注释掉端口映射
+    #   - "5432:5432"
+    volumes:
+      - ./volumes/postgres_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U supermemory -d supermemory"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - supermemory
+
+  # Redis (缓存和会话)
+  redis:
+    image: redis:7-alpine
+    container_name: supermemory-redis
+    environment:
+      - TZ=Asia/Shanghai
+    # ports:  # 仅内部访问
+    #   - "6379:6379"
+    volumes:
+      - ./volumes/redis_data:/data
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass redis_password_2024
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "redis_password_2024", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - supermemory
+
+  # SuperMemory 主应用
+  supermemory:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    container_name: supermemory-app
+    env_file:
+      - .env
+    ports:
+      - "8040:3000"  # 只暴露 Web 应用端口
+    volumes:
+      - ./volumes/app:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '1.0'
+        reservations:
+          memory: 512M
+          cpus: '0.5'
+    networks:
+      - supermemory
+
+networks:
+  supermemory:
+    name: supermemory-network
+    ipam:
+      config:
+        - subnet: 172.29.0.0/16  # 指定子网
+    driver: bridge
